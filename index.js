@@ -41,7 +41,6 @@ const STEP = {
     MAIN_MENU: 'MAIN_MENU',
     PICK_DEPARTMENT: 'PICK_DEPARTMENT',
     PICK_MATERIAL: 'PICK_MATERIAL',
-    ENTER_QUANTITY: 'ENTER_QUANTITY',
     ENTER_AMOUNT: 'ENTER_AMOUNT',
     ENTER_NOTE: 'ENTER_NOTE',
     EMP_MENU: 'EMP_MENU',
@@ -536,14 +535,13 @@ async function sendEmployeeActionMenu(chatId, s) {
     await bot.sendMessage(chatId, text, employeeActionKeyboard())
 }
 
-async function saveMovement({ user, departmentId, materialName, quantity, amount, note }) {
+async function saveMovement({ user, departmentId, materialName, amount, note }) {
     const material = await resolveOrCreateMaterialByName(materialName)
-    const qty = Number(quantity)
+    const qty = 1
     const total = Number(amount)
-    if (!Number.isFinite(qty) || qty <= 0) throw new Error('Invalid quantity')
     if (!Number.isFinite(total) || total < 0) throw new Error('Invalid amount')
 
-    const unitPrice = qty > 0 ? total / qty : 0
+    const unitPrice = total
     const auditNote = `${note || ''}\n\n[telegram]\nuser: ${user.full_name || 'Unknown'}\nphone: ${user.phone || '-'}`
 
     const { error } = await supabase.from('material_movements').insert([
@@ -570,7 +568,10 @@ function getSession(chatId) {
 function mainMenuKeyboard() {
     return {
         reply_markup: {
-            keyboard: [[{ text: 'Moliya' }, { text: 'Xodimlar' }]],
+            keyboard: [
+                [{ text: 'Moliya' }, { text: 'Xodimlar' }],
+                [{ text: 'Moliya ro\'yxati' }]
+            ],
             resize_keyboard: true,
         },
     }
@@ -626,6 +627,42 @@ async function sendMaterialStep(chatId, s) {
     )
 }
 
+async function sendRecentMovements(chatId) {
+    const { data, error } = await supabase
+        .from('material_movements')
+        .select(`
+            id,
+            total_cost,
+            movement_date,
+            raw_materials (name_uz),
+            departments (name_uz)
+        `)
+        .order('created_at', { ascending: false })
+        .limit(15)
+
+    if (error) {
+        console.error('Fetch movements error:', error)
+        await bot.sendMessage(chatId, "Ro'yxatni olishda xatolik yuz berdi.")
+        return
+    }
+
+    if (!data || data.length === 0) {
+        await bot.sendMessage(chatId, "Hozircha harajatlar yo'q.")
+        return
+    }
+
+    const lines = ["📊 Oxirgi 15 ta harajat:", ""]
+    data.forEach((m, i) => {
+        const material = m.raw_materials?.name_uz || 'Material'
+        const department = m.departments?.name_uz || 'Bo\'lim'
+        const date = formatDdMmYyyy(m.movement_date)
+        const cost = Number(m.total_cost).toLocaleString('uz-UZ')
+        lines.push(`${i + 1}. ${date} | ${material} (${department}): ${cost} so'm`)
+    })
+
+    await bot.sendMessage(chatId, lines.join('\n'))
+}
+
 async function goBack(chatId, s) {
     if (s.step === STEP.EMP_SAL_NOTE) {
         s.step = STEP.EMP_SAL_AMOUNT
@@ -665,13 +702,8 @@ async function goBack(chatId, s) {
         await sendDepartmentStep(chatId, s)
         return
     }
-    if (s.step === STEP.ENTER_QUANTITY) {
-        await sendMaterialStep(chatId, s)
-        return
-    }
     if (s.step === STEP.ENTER_AMOUNT) {
-        s.step = STEP.ENTER_QUANTITY
-        await bot.sendMessage(chatId, 'Miqdor kiriting:')
+        await sendMaterialStep(chatId, s)
         return
     }
     if (s.step === STEP.ENTER_NOTE) {
@@ -714,6 +746,11 @@ bot.on('message', async (msg) => {
 
         if (s.authUser && text === 'Xodimlar') {
             await sendEmployeeList(chatId, s)
+            return
+        }
+
+        if (s.authUser && text === 'Moliya ro\'yxati') {
+            await sendRecentMovements(chatId)
             return
         }
 
@@ -871,13 +908,6 @@ bot.on('message', async (msg) => {
                 return
             }
             s.payload.materialName = text
-            s.step = STEP.ENTER_QUANTITY
-            await bot.sendMessage(chatId, 'Miqdor kiriting:')
-            return
-        }
-
-        if (s.step === STEP.ENTER_QUANTITY) {
-            s.payload.quantity = text
             s.step = STEP.ENTER_AMOUNT
             await bot.sendMessage(chatId, 'Summa kiriting:')
             return
@@ -895,7 +925,6 @@ bot.on('message', async (msg) => {
                 user: s.authUser,
                 departmentId: s.payload.departmentId,
                 materialName: s.payload.materialName,
-                quantity: s.payload.quantity,
                 amount: s.payload.amount,
                 note: text === '-' ? '' : text,
             })
