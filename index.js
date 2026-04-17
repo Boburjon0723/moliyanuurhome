@@ -822,11 +822,17 @@ function employeeOnlyMenuKeyboard() {
     }
 }
 
-/** Admin (MANAGER_CHAT_IDS) — to‘liq menyu; CRM xodimi — faqat dam olish; qolgan ruxsatli foydalanuvchilar — moliya menyusi */
+/** Faqat MANAGER_CHAT_IDS — Moliya / Xodimlar; CRM xodimi — faqat dam olish; boshqa hech kim moliya tug‘malarini ko‘rmaydi */
 function mainMenuForSession(s, chatId) {
     if (isManagerChatId(chatId)) return adminMainMenuKeyboard()
     if (isEmployeeSession(s, chatId)) return employeeOnlyMenuKeyboard()
-    return adminMainMenuKeyboard()
+    return { reply_markup: { remove_keyboard: true } }
+}
+
+function welcomeSubline(s, chatId) {
+    if (isManagerChatId(chatId)) return "Bo'limni tanlang:"
+    if (isEmployeeSession(s, chatId)) return "Dam olish uchun pastdagi tugmani bosing."
+    return "Moliya va xodimlar faqat boshqaruvchilar uchun. CRM da xodim telefoningiz to‘g‘ri bo‘lsa, faqat dam olish tug‘masi chiqadi; aks holda admin bilan bog‘laning."
 }
 
 function departmentKeyboard(departments) {
@@ -1028,12 +1034,9 @@ bot.on('message', async (msg) => {
             }
             s.authUser = user
             s.step = STEP.MAIN_MENU
-            const sub = isEmployeeSession(s, chatId)
-                ? "Dam olish uchun pastdagi tugmani bosing."
-                : "Bo'limni tanlang:"
             await bot.sendMessage(
                 chatId,
-                `Xush kelibsiz, ${user.full_name || 'foydalanuvchi'}.\n${sub}`,
+                `Xush kelibsiz, ${user.full_name || 'foydalanuvchi'}.\n${welcomeSubline(s, chatId)}`,
                 mainMenuForSession(s, chatId)
             )
             return
@@ -1045,10 +1048,10 @@ bot.on('message', async (msg) => {
         }
 
         if (s.authUser && text === 'Moliya') {
-            if (isEmployeeSession(s, chatId)) {
+            if (!isManagerChatId(chatId)) {
                 await bot.sendMessage(
                     chatId,
-                    "Sizda faqat «Dam olish» so'rovi mavjud. Moliya bo'limi faqat adminlar uchun (MANAGER_CHAT_IDS)."
+                    "Moliya bo'limi faqat adminlar uchun (sizning chat_id MANAGER_CHAT_IDS ro'yxatida bo'lishi kerak)."
                 )
                 return
             }
@@ -1061,10 +1064,10 @@ bot.on('message', async (msg) => {
         }
 
         if (s.authUser && text === 'Xodimlar') {
-            if (isEmployeeSession(s, chatId)) {
+            if (!isManagerChatId(chatId)) {
                 await bot.sendMessage(
                     chatId,
-                    "Xodimlar ro'yxati faqat adminlar uchun. Sizda faqat dam olish so'rovi bor."
+                    "Xodimlar bo'limi faqat adminlar uchun."
                 )
                 return
             }
@@ -1073,7 +1076,7 @@ bot.on('message', async (msg) => {
         }
 
         if (s.authUser && text === 'Moliya ro\'yxati') {
-            if (isEmployeeSession(s, chatId)) {
+            if (!isManagerChatId(chatId)) {
                 await bot.sendMessage(chatId, "Bu ro'yxat faqat adminlar uchun.")
                 return
             }
@@ -1226,12 +1229,9 @@ bot.on('message', async (msg) => {
             }
             s.authUser = user
             s.step = STEP.MAIN_MENU
-            const sub2 = isEmployeeSession(s, chatId)
-                ? "Dam olish uchun pastdagi tugmani bosing."
-                : "Bo'limni tanlang:"
             await bot.sendMessage(
                 chatId,
-                `Xush kelibsiz, ${user.full_name || 'foydalanuvchi'}.\n${sub2}`,
+                `Xush kelibsiz, ${user.full_name || 'foydalanuvchi'}.\n${welcomeSubline(s, chatId)}`,
                 mainMenuForSession(s, chatId)
             )
             return

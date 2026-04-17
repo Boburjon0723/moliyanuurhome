@@ -32,9 +32,9 @@ npm start
 
 ## Kim qanday kiradi?
 
-- **Adminlar** (`MANAGER_CHAT_IDS` da bo‘lgan 2 kishi): `/start` — **Moliya**, **Xodimlar**, **Moliya ro‘yxati** (telefon kerak emas).
-- **CRM xodimlari** (`employees` jadvalida telefon qayd etilgan): telefon orqali kirishdan keyin menyuda **faqat «🛏 Dam olmoqchiman»** — Moliya/Xodimlar tug‘malari **ko‘rinmaydi**.
-- **Boshqa ruxsatli** (`bot_users` va h.k., lekin CRM xodimi emas): avvalgidek **to‘liq moliya menyusi** (telefon bilan).
+- **Adminlar** (`MANAGER_CHAT_IDS` da bo‘lgan 2 kishi): `/start` — **Moliya**, **Xodimlar**, **Moliya ro‘yxati** (telefon kerak emas). **Boshqa hech kim bu tug‘malarni ko‘rmaydi.**
+- **CRM xodimlari** (`employees` + telefon): telefon bilan kirgach **faqat «🛏 Dam olmoqchiman»**.
+- **Boshqa** (`bot_users` va h.k., lekin admin ham xodim ham emas): moliya tug‘malari **yo‘q**; faqat tushuntirish matni (klaviatura yashiriladi).
 - CRM **Xodimlar** kartasida **Telefon** `998XXXXXXXXX` — bot shu raqamni tan oladi.
 - Dam olish yozuvi `employee_leave_requests` — SQL: `create_employee_leave_requests.sql`.
 
