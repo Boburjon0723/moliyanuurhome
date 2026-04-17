@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS public.employee_leave_requests (
   telegram_chat_id bigint,
   note text,
   source text NOT NULL DEFAULT 'telegram',
+  status text NOT NULL DEFAULT 'pending',
+  resolved_at timestamptz,
+  resolved_by_telegram_id bigint,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 

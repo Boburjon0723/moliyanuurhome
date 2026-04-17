@@ -36,7 +36,7 @@ npm start
 - **CRM xodimlari** (`employees` + telefon): telefon bilan kirgach **faqat «🛏 Dam olmoqchiman»**.
 - **Boshqa** (`bot_users` va h.k., lekin admin ham xodim ham emas): moliya tug‘malari **yo‘q**; faqat tushuntirish matni (klaviatura yashiriladi).
 - CRM **Xodimlar** kartasida **Telefon** `998XXXXXXXXX` — bot shu raqamni tan oladi.
-- Dam olish yozuvi `employee_leave_requests` — SQL: `create_employee_leave_requests.sql`.
+- Dam olish: xabar adminlarga **Ha / Yo‘q** inline tugmalar bilan boradi. **Ha** — CRM da xodimning `rest_days` +1; **Yo‘q** — rad, CRM o‘zgarmaydi. Avvalgi bazalar uchun: `supabase_employee_leave_approval_columns.sql`.
 
 ## Fayllar
 

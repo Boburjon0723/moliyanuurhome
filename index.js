@@ -715,18 +715,24 @@ async function handleLeaveRequest(chatId, s) {
         return
     }
     const name = s.authUser?.full_name || 'Xodim'
-    const { error } = await supabase.from('employee_leave_requests').insert({
-        employee_id: eid,
-        telegram_chat_id: chatId,
-        source: 'telegram',
-        note: null,
-    })
+    const { data: inserted, error } = await supabase
+        .from('employee_leave_requests')
+        .insert({
+            employee_id: eid,
+            telegram_chat_id: chatId,
+            source: 'telegram',
+            status: 'pending',
+            note: null,
+        })
+        .select('id')
+        .single()
+
     if (error) {
         const m = String(error.message || '')
-        if (m.includes('does not exist') || m.includes('Could not find')) {
+        if (m.includes('does not exist') || m.includes('Could not find') || m.includes('column')) {
             await bot.sendMessage(
                 chatId,
-                "CRMda `employee_leave_requests` jadvali yo'q. `supabase_crm_employee_phone_leave_bot.sql` ni Supabase da ishga tushiring."
+                "CRMda jadval yoki `status` ustuni yo'q. `supabase_employee_leave_approval_columns.sql` va `create_employee_leave_requests.sql` ni Supabase da ishga tushiring."
             )
             return
         }
@@ -734,14 +740,143 @@ async function handleLeaveRequest(chatId, s) {
         await bot.sendMessage(chatId, `Saqlashda xato: ${error.message}`)
         return
     }
-    await bot.sendMessage(chatId, `✅ So'rov yuborildi. Boshliq xabar oladi.\n\n👤 ${name}`)
+
+    const leaveId = inserted.id
+    const managerLine = `🛏 <b>Dam olish so'rovi</b>\n\nXodim: <b>${escapeHtml(name)}</b>\n\nBu xodim dam olmoqchi. Qaroringiz:`
+    const inline = {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: 'Ha', callback_data: `lv:y:${leaveId}` },
+                    { text: "Yo'q", callback_data: `lv:n:${leaveId}` },
+                ],
+            ],
+        },
+    }
+
     const managers = parseManagerChatIds()
-    const line = `🛏 <b>Dam olish so'rovi</b>\n\nXodim: <b>${escapeHtml(name)}</b>`
+    if (!managers.length) {
+        await bot.sendMessage(
+            chatId,
+            "So'rov saqlandi, lekin MANAGER_CHAT_IDS sozlanmagan — adminlarga xabar ketmaydi."
+        )
+        return
+    }
     for (const mid of managers) {
         try {
-            await bot.sendMessage(mid, line, { parse_mode: 'HTML' })
+            await bot.sendMessage(mid, managerLine, inline)
         } catch (e) {
             console.error('notify manager', mid, e.message)
+        }
+    }
+    await bot.sendMessage(
+        chatId,
+        `So'rovingiz yuborildi. Admin yoki boshliq «Ha» yoki «Yo'q» bilan javob beradi.\n\n👤 ${name}`
+    )
+}
+
+async function approveLeaveRequest(query, leaveId) {
+    const { data: rows, error } = await supabase
+        .from('employee_leave_requests')
+        .update({
+            status: 'approved',
+            resolved_at: new Date().toISOString(),
+            resolved_by_telegram_id: query.from.id,
+        })
+        .eq('id', leaveId)
+        .eq('status', 'pending')
+        .select('employee_id, telegram_chat_id')
+
+    if (error) throw error
+    if (!rows?.length) {
+        await bot.answerCallbackQuery(query.id, { text: "Bu so'rov allaqachon yopilgan." })
+        return
+    }
+    const row = rows[0]
+    const { data: emp, error: empErr } = await supabase
+        .from('employees')
+        .select('id, name, rest_days')
+        .eq('id', row.employee_id)
+        .maybeSingle()
+    if (empErr) console.error('employees fetch:', empErr)
+
+    const newRest = (Number(emp?.rest_days) || 0) + 1
+    const { error: upErr } = await supabase.from('employees').update({ rest_days: newRest }).eq('id', row.employee_id)
+    if (upErr) {
+        console.error('employees rest_days update:', upErr)
+        await bot.answerCallbackQuery(query.id, { text: `CRM xatolik: ${upErr.message}`, show_alert: true })
+        return
+    }
+
+    const empName = emp?.name || 'Xodim'
+    await bot.answerCallbackQuery(query.id, { text: 'Qabul qilindi' })
+
+    const doneText = `✅ <b>Qabul qilindi</b>\n\nXodim: ${escapeHtml(empName)}\nCRM: dam olgan kunlar +1 (jami: ${newRest})`
+    try {
+        await bot.editMessageText(doneText, {
+            chat_id: query.message.chat.id,
+            message_id: query.message.message_id,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [] },
+        })
+    } catch (e) {
+        console.warn('editMessageText:', e.message)
+    }
+
+    if (row.telegram_chat_id) {
+        try {
+            await bot.sendMessage(
+                row.telegram_chat_id,
+                `✅ Dam olish so'rovingiz <b>qabul qilindi</b>.\n\nCRM da «Dam olgan kunlar» yangilandi (jami: ${newRest}).`,
+                { parse_mode: 'HTML' }
+            )
+        } catch (e) {
+            console.error('notify employee approve:', e.message)
+        }
+    }
+}
+
+async function rejectLeaveRequest(query, leaveId) {
+    const { data: rows, error } = await supabase
+        .from('employee_leave_requests')
+        .update({
+            status: 'rejected',
+            resolved_at: new Date().toISOString(),
+            resolved_by_telegram_id: query.from.id,
+        })
+        .eq('id', leaveId)
+        .eq('status', 'pending')
+        .select('telegram_chat_id')
+
+    if (error) throw error
+    if (!rows?.length) {
+        await bot.answerCallbackQuery(query.id, { text: "Bu so'rov allaqachon yopilgan." })
+        return
+    }
+    const row = rows[0]
+    await bot.answerCallbackQuery(query.id, { text: "Rad etildi" })
+
+    try {
+        await bot.editMessageText(`❌ <b>Rad etildi</b>\n\nSo'rov yopildi. CRM da o'zgarish yo'q.`, {
+            chat_id: query.message.chat.id,
+            message_id: query.message.message_id,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [] },
+        })
+    } catch (e) {
+        console.warn('editMessageText:', e.message)
+    }
+
+    if (row.telegram_chat_id) {
+        try {
+            await bot.sendMessage(
+                row.telegram_chat_id,
+                `❌ Dam olish so'rovingiz <b>rad etildi</b>. CRM da o'zgarish kiritilmadi.`,
+                { parse_mode: 'HTML' }
+            )
+        } catch (e) {
+            console.error('notify employee reject:', e.message)
         }
     }
 }
@@ -1320,6 +1455,35 @@ bot.on('message', async (msg) => {
     } catch (err) {
         console.error('Bot error:', err)
         await bot.sendMessage(chatId, `Xatolik: ${err.message}`)
+    }
+})
+
+bot.on('callback_query', async (query) => {
+    try {
+        const data = String(query.data || '')
+        const m = /^lv:([yn]):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(data)
+        if (!m) return
+
+        const approved = m[1].toLowerCase() === 'y'
+        const leaveId = m[2]
+        const uid = Number(query.from?.id)
+        if (!Number.isFinite(uid) || !isManagerChatId(uid)) {
+            await bot.answerCallbackQuery(query.id, { text: "Sizda ruxsat yo'q." })
+            return
+        }
+
+        if (approved) {
+            await approveLeaveRequest(query, leaveId)
+        } else {
+            await rejectLeaveRequest(query, leaveId)
+        }
+    } catch (err) {
+        console.error('callback_query:', err)
+        try {
+            await bot.answerCallbackQuery(query.id, { text: 'Xatolik' })
+        } catch (_) {
+            /* ignore */
+        }
     }
 })
 
