@@ -62,10 +62,6 @@ const UI_EMP = {
     SUMMARY: '📊 Oylik hisobot',
 }
 
-function normalizePhone(value) {
-    return String(value || '').replace(/[^\d+]/g, '')
-}
-
 function canonicalPhone(value) {
     const digits = String(value || '').replace(/\D/g, '')
     if (!digits) return ''
@@ -87,39 +83,55 @@ function parseManagerChatIds() {
     return out
 }
 
-async function findAllowedUserByPhone(phone) {
+/**
+ * CRM «Xodimlar» da telefon 998XXXXXXXXX ko‘rinishida saqlanadi — shu bilan bir xil canonical qidiruv.
+ * phoneRaw: foydalanuvchi matni, Telegram kontakti yoki +998…
+ */
+async function findAllowedUserByPhone(phoneRaw) {
+    const inputCanonical = canonicalPhone(phoneRaw)
+    if (!inputCanonical) return null
+
     const candidates = [BOT_USERS_TABLE, 'users', 'customers', 'employees']
-    const inputCanonical = canonicalPhone(phone)
+
     for (const table of candidates) {
-        let { data, error } = await supabase.from(table).select('*').eq('phone', phone).limit(1)
-        if ((!data || !data.length) && !error) {
-            // Fallback: DBdagi turli formatlarni bir xil ko'rinishga keltirib solishtiramiz.
-            const scan = await supabase.from(table).select('*').limit(500)
-            data = scan.data || []
-            error = scan.error
-            if (!error) {
-                data = data.filter((row) => canonicalPhone(row.phone) === inputCanonical)
-            }
-        }
-        if (error) {
-            const msg = String(error.message || '')
+        let row = null
+
+        const direct = await supabase.from(table).select('*').eq('phone', inputCanonical).limit(1)
+        if (direct.error) {
+            const msg = String(direct.error.message || '')
             const tableMissing = msg.includes('Could not find the table') || msg.includes('does not exist')
             const colMissing = msg.includes("column 'phone' does not exist")
             if (tableMissing || colMissing) continue
-            throw error
+            throw direct.error
         }
-        if (data && data[0]) {
-            const row = data[0]
-            const isActive = row.active === undefined ? true : !!row.active
-            if (!isActive) return null
-            const isEmployeeRow = table === 'employees'
-            return {
-                id: row.id,
-                full_name: row.full_name || row.name || 'User',
-                phone: row.phone,
-                source_table: table,
-                employee_id: isEmployeeRow ? row.id : null,
+        if (direct.data?.[0]) {
+            row = direct.data[0]
+        }
+
+        if (!row) {
+            const scan = await supabase.from(table).select('*').limit(2000)
+            if (scan.error) {
+                const msg = String(scan.error.message || '')
+                const tableMissing = msg.includes('Could not find the table') || msg.includes('does not exist')
+                const colMissing = msg.includes("column 'phone' does not exist")
+                if (tableMissing || colMissing) continue
+                throw scan.error
             }
+            row =
+                (scan.data || []).find((r) => canonicalPhone(r.phone) === inputCanonical) || null
+        }
+
+        if (!row) continue
+
+        const isActive = row.active === undefined ? true : !!row.active
+        if (!isActive) return null
+        const isEmployeeRow = table === 'employees'
+        return {
+            id: row.id,
+            full_name: row.full_name || row.name || 'User',
+            phone: row.phone,
+            source_table: table,
+            employee_id: isEmployeeRow ? row.id : null,
         }
     }
     return null
@@ -1125,8 +1137,7 @@ bot.on('message', async (msg) => {
         }
 
         if (s.step === STEP.WAIT_PHONE) {
-            const phone = normalizePhone(text)
-            const user = await findAllowedUserByPhone(phone)
+            const user = await findAllowedUserByPhone(text)
             if (!user) {
                 await bot.sendMessage(chatId, 'Ruxsat berilmagan. CRMda raqamingiz topilmadi (reject).')
                 return

@@ -32,7 +32,8 @@ npm start
 ## Kim qanday kiradi?
 
 - **Ruxsat** `bot_users`, `users`, `customers` yoki CRM **`employees`** jadvalidagi **telefon** bo‘yicha (raqam formatlari mos kelishi kerak).
-- CRM **Xodimlar** kartasida telefon `998…` ko‘rinishida bo‘lsa, xodim botda taniladi va asosiy menyuda **🛌 Dam olmoqchiman** tugmasi chiqadi.
+- CRM **Xodimlar** da xodimni tahrirlab **Telefon** maydonini to‘ldiring — saqlanganda raqam `998XXXXXXXXX` ko‘rinishida yoziladi. Bot shu raqamni (yoki `90…` / `+998…` kiritganingizda ham) bir xil deb tan oladi.
+- Telefon qo‘yilgan xodim botda tanilgach asosiy menyuda **🛌 Dam olmoqchiman** tugmasi chiqadi.
 - Dam olish yozuvi `employee_leave_requests` jadvaliga tushadi; CRM da Realtime yoqilsa bildirishnoma ham keladi. SQL: `create_employee_leave_requests.sql`.
 
 ## Fayllar
