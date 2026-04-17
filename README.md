@@ -30,6 +30,11 @@ npm start
 
 > **Eslatma:** `SUPABASE_SERVICE_ROLE_KEY` ni hech qachon GitHubga commit qilmang — faqat Railway Variables da.
 
+### «row-level security policy» / INSERT xatosi
+
+- **Eng yaxshi yechim:** Railway Variables da **`SUPABASE_SERVICE_ROLE_KEY`** to‘g‘ri qo‘yilgan bo‘lsin (Supabase → Settings → API → `service_role`). Bot shu kalit bilan RLS dan o‘tadi.
+- Agar vaqtincha **anon** kalit ishlatilsa: Supabase **SQL Editor** da `supabase_employee_leave_requests_rls_insert_update.sql` ni ishga tushiring (INSERT/UPDATE ruxsatlari). **«Ha»** bosilganda `employees` yangilanganda ham xato bo‘lsa — service role ishlating.
+
 ## Kim qanday kiradi?
 
 - **Adminlar** (`MANAGER_CHAT_IDS` da bo‘lgan 2 kishi): `/start` — **Moliya**, **Xodimlar**, **Moliya ro‘yxati** (telefon kerak emas). **Boshqa hech kim bu tug‘malarni ko‘rmaydi.**

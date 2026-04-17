@@ -24,4 +24,17 @@ CREATE POLICY "employee_leave_requests_select_anon"
   TO anon, authenticated
   USING (true);
 
+DROP POLICY IF EXISTS "employee_leave_requests_insert_anon" ON public.employee_leave_requests;
+CREATE POLICY "employee_leave_requests_insert_anon"
+  ON public.employee_leave_requests FOR INSERT
+  TO anon, authenticated
+  WITH CHECK (true);
+
+DROP POLICY IF EXISTS "employee_leave_requests_update_anon" ON public.employee_leave_requests;
+CREATE POLICY "employee_leave_requests_update_anon"
+  ON public.employee_leave_requests FOR UPDATE
+  TO anon, authenticated
+  USING (true)
+  WITH CHECK (true);
+
 -- Realtime: Supabase → Database → Replication → employee_leave_requests
