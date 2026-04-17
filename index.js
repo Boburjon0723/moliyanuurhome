@@ -48,10 +48,11 @@ const STEP = {
     EMP_ADV_AMOUNT: 'EMP_ADV_AMOUNT',
     EMP_ADV_NOTE: 'EMP_ADV_NOTE',
     EMP_SAL_AMOUNT: 'EMP_SAL_AMOUNT',
-    EMP_SAL_AMOUNT: 'EMP_SAL_AMOUNT',
     EMP_SAL_NOTE: 'EMP_SAL_NOTE',
     PICK_MONTH: 'PICK_MONTH',
 }
+
+const LEAVE_BTN = '🛌 Dam olmoqchiman'
 
 const UI_EMP = {
     ADV: '💰 Avans kiritish',
@@ -74,8 +75,20 @@ function canonicalPhone(value) {
     return digits
 }
 
+function parseManagerChatIds() {
+    const raw = process.env.MANAGER_CHAT_IDS || process.env.TELEGRAM_MANAGER_CHAT_IDS || ''
+    const out = []
+    for (const part of raw.split(/[,\s]+/)) {
+        const t = part.trim()
+        if (!t) continue
+        const n = Number(t)
+        if (Number.isFinite(n)) out.push(n)
+    }
+    return out
+}
+
 async function findAllowedUserByPhone(phone) {
-    const candidates = [BOT_USERS_TABLE, 'users', 'customers']
+    const candidates = [BOT_USERS_TABLE, 'users', 'customers', 'employees']
     const inputCanonical = canonicalPhone(phone)
     for (const table of candidates) {
         let { data, error } = await supabase.from(table).select('*').eq('phone', phone).limit(1)
@@ -99,11 +112,13 @@ async function findAllowedUserByPhone(phone) {
             const row = data[0]
             const isActive = row.active === undefined ? true : !!row.active
             if (!isActive) return null
+            const isEmployeeRow = table === 'employees'
             return {
                 id: row.id,
                 full_name: row.full_name || row.name || 'User',
                 phone: row.phone,
                 source_table: table,
+                employee_id: isEmployeeRow ? row.id : null,
             }
         }
     }
@@ -538,7 +553,11 @@ async function sendEmployeeList(chatId, s) {
     const list = await getEmployees()
     if (!list.length) {
         s.step = STEP.MAIN_MENU
-        await bot.sendMessage(chatId, "Hozircha CRMda xodimlar yo'q. Avval CRM → Xodimlar bo'limida qo'shing.", mainMenuKeyboard())
+        await bot.sendMessage(
+            chatId,
+            "Hozircha CRMda xodimlar yo'q. Avval CRM → Xodimlar bo'limida qo'shing.",
+            mainMenuKeyboard(s.authUser)
+        )
         return
     }
     const periodYm = s.reportPeriodYm
@@ -653,6 +672,54 @@ async function sendEmployeeActionMenu(chatId, s) {
     await bot.sendMessage(chatId, text, employeeActionKeyboard())
 }
 
+async function handleLeaveRequest(chatId, s) {
+    const eid = s.authUser?.employee_id
+    if (!eid) {
+        await bot.sendMessage(
+            chatId,
+            "Bu tugma faqat CRM dagi «Xodimlar» bo'limida telefoni qayd etilgan xodimlar uchun. Admin bilan bog'laning."
+        )
+        return
+    }
+    const name = s.authUser?.full_name || 'Xodim'
+    const { error } = await supabase.from('employee_leave_requests').insert({
+        employee_id: eid,
+        telegram_chat_id: chatId,
+        source: 'telegram',
+        note: null,
+    })
+    if (error) {
+        const m = String(error.message || '')
+        if (m.includes('does not exist') || m.includes('Could not find')) {
+            await bot.sendMessage(
+                chatId,
+                "CRMda `employee_leave_requests` jadvali yo'q. `supabase_crm_employee_phone_leave_bot.sql` ni Supabase da ishga tushiring."
+            )
+            return
+        }
+        console.error('leave_requests insert:', error)
+        await bot.sendMessage(chatId, `Saqlashda xato: ${error.message}`)
+        return
+    }
+    await bot.sendMessage(chatId, `✅ So'rov yuborildi. Boshliq xabar oladi.\n\n👤 ${name}`)
+    const managers = parseManagerChatIds()
+    const line = `🛌 <b>Dam olish so'rovi</b>\n\nXodim: <b>${escapeHtml(name)}</b>`
+    for (const mid of managers) {
+        try {
+            await bot.sendMessage(mid, line, { parse_mode: 'HTML' })
+        } catch (e) {
+            console.error('notify manager', mid, e.message)
+        }
+    }
+}
+
+function escapeHtml(s) {
+    return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+}
+
 async function saveMovement({ user, departmentId, materialName, amount, note }) {
     const material = await resolveOrCreateMaterialByName(materialName)
     const qty = 1
@@ -701,13 +768,17 @@ function employeeActionKeyboard() {
     }
 }
 
-function mainMenuKeyboard() {
+function mainMenuKeyboard(authUser) {
+    const rows = [
+        [{ text: 'Moliya' }, { text: 'Xodimlar' }],
+        [{ text: 'Moliya ro\'yxati' }],
+    ]
+    if (authUser && authUser.employee_id) {
+        rows.push([{ text: LEAVE_BTN }])
+    }
     return {
         reply_markup: {
-            keyboard: [
-                [{ text: 'Moliya' }, { text: 'Xodimlar' }],
-                [{ text: 'Moliya ro\'yxati' }]
-            ],
+            keyboard: rows,
             resize_keyboard: true,
         },
     }
@@ -825,13 +896,13 @@ async function goBack(chatId, s) {
     if (s.step === STEP.EMP_MENU) {
         s.payload = {}
         s.step = STEP.MAIN_MENU
-        await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuKeyboard())
+        await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuKeyboard(s.authUser))
         return
     }
     if (s.step === STEP.PICK_DEPARTMENT) {
         s.payload = {}
         s.step = STEP.MAIN_MENU
-        await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuKeyboard())
+        await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuKeyboard(s.authUser))
         return
     }
     if (s.step === STEP.PICK_MATERIAL) {
@@ -853,13 +924,24 @@ async function goBack(chatId, s) {
     }
     s.payload = {}
     s.step = STEP.MAIN_MENU
-    await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuKeyboard())
+    await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuKeyboard(s.authUser))
 }
 
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id
-    sessions.set(chatId, { step: STEP.WAIT_PHONE, authUser: null, payload: {} })
-    await bot.sendMessage(chatId, 'Telefon raqamingizni yuboring (masalan: +99890xxxxxxx)')
+    sessions.set(chatId, {
+        step: STEP.WAIT_PHONE,
+        authUser: null,
+        reportPeriodYm: null,
+        payload: {},
+    })
+    await bot.sendMessage(chatId, 'Telefon raqamingizni yozing yoki kontaktni yuboring.', {
+        reply_markup: {
+            keyboard: [[{ text: '📱 Kontaktni yuborish', request_contact: true }]],
+            resize_keyboard: true,
+            one_time_keyboard: true,
+        },
+    })
 })
 
 bot.on('message', async (msg) => {
@@ -870,6 +952,22 @@ bot.on('message', async (msg) => {
     const s = getSession(chatId)
 
     try {
+        if (msg.contact && s.step === STEP.WAIT_PHONE) {
+            const user = await findAllowedUserByPhone(msg.contact.phone_number)
+            if (!user) {
+                await bot.sendMessage(chatId, "Ruxsat berilmadi. CRMda raqamingiz topilmadi (bot_users / mijozlar / xodimlar).")
+                return
+            }
+            s.authUser = user
+            s.step = STEP.MAIN_MENU
+            await bot.sendMessage(
+                chatId,
+                `Xush kelibsiz, ${user.full_name || 'foydalanuvchi'}.\nBo'limni tanlang:`,
+                mainMenuKeyboard(s.authUser)
+            )
+            return
+        }
+
         if (isBackText(text)) {
             await goBack(chatId, s)
             return
@@ -1038,7 +1136,7 @@ bot.on('message', async (msg) => {
             await bot.sendMessage(
                 chatId,
                 `Xush kelibsiz, ${user.full_name || 'foydalanuvchi'}.\nBo'limni tanlang:`,
-                mainMenuKeyboard()
+                mainMenuKeyboard(s.authUser)
             )
             return
         }
@@ -1092,7 +1190,11 @@ bot.on('message', async (msg) => {
 
             s.payload = {}
             s.step = STEP.MAIN_MENU
-            await bot.sendMessage(chatId, "Saqlandi. Ma'lumot CRM moliya bo'limiga yuborildi.", mainMenuKeyboard())
+            await bot.sendMessage(
+                chatId,
+                "Saqlandi. Ma'lumot CRM moliya bo'limiga yuborildi.",
+                mainMenuKeyboard(s.authUser)
+            )
             return
         }
     } catch (err) {
