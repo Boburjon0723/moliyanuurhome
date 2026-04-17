@@ -22,7 +22,8 @@ npm start
    - `SUPABASE_SERVICE_ROLE_KEY` — **tavsiya** (server uchun; RLS dan tashqari to‘liq huquq)
    - `SUPABASE_ANON_KEY` — ixtiyoriy (service role bo‘lmasa)
    - `BOT_USERS_TABLE` — ixtiyoriy, default `bot_users`
-   - `MANAGER_CHAT_IDS` — boshliq(lar)ning Telegram **chat_id** lari (vergul bilan), masalan: `-1001234567890,123456789`. Xodim «🛌 Dam olmoqchiman» bosganda shu chat(lar)ga xabar ketadi.
+   - `MANAGER_CHAT_IDS` — **2 ta admin** (o‘zingiz va boshliq) ning shaxsiy Telegram **chat_id** lari, vergul bilan: `123456789,987654321`. Shunday foydalanuvchilar `/start` da **telefon so‘ralmaydi**, darhol Moliya menyusi ochiladi. Xodim dam olish so‘rasa, shu chat(lar)ga xabar ketadi.  
+     *chat_id ni olish: @userinfobot ga yozing yoki Telegram Web → profilingiz.*
 3. **Settings → Deploy**: **Start Command** bo‘sh qoldiring yoki `npm start` (default).
 4. **Root Directory**: repoda faqat bot fayllari bo‘lsa o‘zgartirish shart emas.
 5. Deploy tugagach logda `Auth lookup table` qatori chiqishi kerak; bot **polling** rejimida ishlaydi — **port ochilmaydi**, Railway faqat jarayonni ushlab turadi.
@@ -31,10 +32,11 @@ npm start
 
 ## Kim qanday kiradi?
 
-- **Ruxsat** `bot_users`, `users`, `customers` yoki CRM **`employees`** jadvalidagi **telefon** bo‘yicha (raqam formatlari mos kelishi kerak).
-- CRM **Xodimlar** da xodimni tahrirlab **Telefon** maydonini to‘ldiring — saqlanganda raqam `998XXXXXXXXX` ko‘rinishida yoziladi. Bot shu raqamni (yoki `90…` / `+998…` kiritganingizda ham) bir xil deb tan oladi.
-- Telefon qo‘yilgan xodim botda tanilgach asosiy menyuda **🛌 Dam olmoqchiman** tugmasi chiqadi.
-- Dam olish yozuvi `employee_leave_requests` jadvaliga tushadi; CRM da Realtime yoqilsa bildirishnoma ham keladi. SQL: `create_employee_leave_requests.sql`.
+- **Adminlar** (`MANAGER_CHAT_IDS` da bo‘lgan 2 kishi): `/start` — **Moliya**, **Xodimlar**, **Moliya ro‘yxati** (telefon kerak emas).
+- **CRM xodimlari** (`employees` jadvalida telefon qayd etilgan): telefon orqali kirishdan keyin menyuda **faqat «🛏 Dam olmoqchiman»** — Moliya/Xodimlar tug‘malari **ko‘rinmaydi**.
+- **Boshqa ruxsatli** (`bot_users` va h.k., lekin CRM xodimi emas): avvalgidek **to‘liq moliya menyusi** (telefon bilan).
+- CRM **Xodimlar** kartasida **Telefon** `998XXXXXXXXX` — bot shu raqamni tan oladi.
+- Dam olish yozuvi `employee_leave_requests` — SQL: `create_employee_leave_requests.sql`.
 
 ## Fayllar
 

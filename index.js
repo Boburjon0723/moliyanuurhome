@@ -52,7 +52,8 @@ const STEP = {
     PICK_MONTH: 'PICK_MONTH',
 }
 
-const LEAVE_BTN = '🛌 Dam olmoqchiman'
+/** Telegram klientlarida turli «yotoq» emoji bo‘lishi mumkin — matn bo‘yicha ham taniymiz */
+const LEAVE_BTN = '🛏 Dam olmoqchiman'
 
 const UI_EMP = {
     ADV: '💰 Avans kiritish',
@@ -83,6 +84,25 @@ function parseManagerChatIds() {
     return out
 }
 
+function isManagerChatId(chatId) {
+    const id = Number(chatId)
+    if (!Number.isFinite(id)) return false
+    return parseManagerChatIds().includes(id)
+}
+
+/** CRM employees jadvalidan kelgan xodim (faqat dam olish menyusi) */
+function isEmployeeSession(s, chatId) {
+    if (isManagerChatId(chatId)) return false
+    return !!(s.authUser && s.authUser.source_table === 'employees' && s.authUser.employee_id)
+}
+
+function isLeaveButtonText(text) {
+    const raw = String(text || '').trim()
+    if (raw === LEAVE_BTN) return true
+    const lower = raw.toLowerCase()
+    return lower.includes('dam olmoqchiman') || lower.includes('dam olish')
+}
+
 /**
  * CRM «Xodimlar» da telefon 998XXXXXXXXX ko‘rinishida saqlanadi — shu bilan bir xil canonical qidiruv.
  * phoneRaw: foydalanuvchi matni, Telegram kontakti yoki +998…
@@ -91,7 +111,8 @@ async function findAllowedUserByPhone(phoneRaw) {
     const inputCanonical = canonicalPhone(phoneRaw)
     if (!inputCanonical) return null
 
-    const candidates = [BOT_USERS_TABLE, 'users', 'customers', 'employees']
+    /** employees birinchi — CRM xodimi bo‘lsa, bot_users dan oldin tan olinadi */
+    const candidates = ['employees', BOT_USERS_TABLE, 'users', 'customers']
 
     for (const table of candidates) {
         let row = null
@@ -568,7 +589,7 @@ async function sendEmployeeList(chatId, s) {
         await bot.sendMessage(
             chatId,
             "Hozircha CRMda xodimlar yo'q. Avval CRM → Xodimlar bo'limida qo'shing.",
-            mainMenuKeyboard(s.authUser)
+            mainMenuForSession(s, chatId)
         )
         return
     }
@@ -715,7 +736,7 @@ async function handleLeaveRequest(chatId, s) {
     }
     await bot.sendMessage(chatId, `✅ So'rov yuborildi. Boshliq xabar oladi.\n\n👤 ${name}`)
     const managers = parseManagerChatIds()
-    const line = `🛌 <b>Dam olish so'rovi</b>\n\nXodim: <b>${escapeHtml(name)}</b>`
+    const line = `🛏 <b>Dam olish so'rovi</b>\n\nXodim: <b>${escapeHtml(name)}</b>`
     for (const mid of managers) {
         try {
             await bot.sendMessage(mid, line, { parse_mode: 'HTML' })
@@ -780,20 +801,32 @@ function employeeActionKeyboard() {
     }
 }
 
-function mainMenuKeyboard(authUser) {
-    const rows = [
-        [{ text: 'Moliya' }, { text: 'Xodimlar' }],
-        [{ text: 'Moliya ro\'yxati' }],
-    ]
-    if (authUser && authUser.employee_id) {
-        rows.push([{ text: LEAVE_BTN }])
-    }
+function adminMainMenuKeyboard() {
     return {
         reply_markup: {
-            keyboard: rows,
+            keyboard: [
+                [{ text: 'Moliya' }, { text: 'Xodimlar' }],
+                [{ text: 'Moliya ro\'yxati' }],
+            ],
             resize_keyboard: true,
         },
     }
+}
+
+function employeeOnlyMenuKeyboard() {
+    return {
+        reply_markup: {
+            keyboard: [[{ text: LEAVE_BTN }]],
+            resize_keyboard: true,
+        },
+    }
+}
+
+/** Admin (MANAGER_CHAT_IDS) — to‘liq menyu; CRM xodimi — faqat dam olish; qolgan ruxsatli foydalanuvchilar — moliya menyusi */
+function mainMenuForSession(s, chatId) {
+    if (isManagerChatId(chatId)) return adminMainMenuKeyboard()
+    if (isEmployeeSession(s, chatId)) return employeeOnlyMenuKeyboard()
+    return adminMainMenuKeyboard()
 }
 
 function departmentKeyboard(departments) {
@@ -908,13 +941,13 @@ async function goBack(chatId, s) {
     if (s.step === STEP.EMP_MENU) {
         s.payload = {}
         s.step = STEP.MAIN_MENU
-        await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuKeyboard(s.authUser))
+        await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuForSession(s, chatId))
         return
     }
     if (s.step === STEP.PICK_DEPARTMENT) {
         s.payload = {}
         s.step = STEP.MAIN_MENU
-        await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuKeyboard(s.authUser))
+        await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuForSession(s, chatId))
         return
     }
     if (s.step === STEP.PICK_MATERIAL) {
@@ -936,11 +969,34 @@ async function goBack(chatId, s) {
     }
     s.payload = {}
     s.step = STEP.MAIN_MENU
-    await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuKeyboard(s.authUser))
+    await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuForSession(s, chatId))
 }
 
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id
+    const from = msg.from
+    if (isManagerChatId(chatId)) {
+        const authUser = {
+            id: from?.id != null ? String(from.id) : 'manager',
+            full_name: [from?.first_name, from?.last_name].filter(Boolean).join(' ').trim() || 'Admin',
+            isManager: true,
+            employee_id: null,
+            source_table: 'manager',
+            phone: null,
+        }
+        sessions.set(chatId, {
+            step: STEP.MAIN_MENU,
+            authUser,
+            reportPeriodYm: null,
+            payload: {},
+        })
+        await bot.sendMessage(
+            chatId,
+            `Salom, ${authUser.full_name}.\nAdmin menyusi — Moliya va Xodimlar (telefon so‘ralmaydi).`,
+            adminMainMenuKeyboard()
+        )
+        return
+    }
     sessions.set(chatId, {
         step: STEP.WAIT_PHONE,
         authUser: null,
@@ -972,10 +1028,13 @@ bot.on('message', async (msg) => {
             }
             s.authUser = user
             s.step = STEP.MAIN_MENU
+            const sub = isEmployeeSession(s, chatId)
+                ? "Dam olish uchun pastdagi tugmani bosing."
+                : "Bo'limni tanlang:"
             await bot.sendMessage(
                 chatId,
-                `Xush kelibsiz, ${user.full_name || 'foydalanuvchi'}.\nBo'limni tanlang:`,
-                mainMenuKeyboard(s.authUser)
+                `Xush kelibsiz, ${user.full_name || 'foydalanuvchi'}.\n${sub}`,
+                mainMenuForSession(s, chatId)
             )
             return
         }
@@ -986,6 +1045,13 @@ bot.on('message', async (msg) => {
         }
 
         if (s.authUser && text === 'Moliya') {
+            if (isEmployeeSession(s, chatId)) {
+                await bot.sendMessage(
+                    chatId,
+                    "Sizda faqat «Dam olish» so'rovi mavjud. Moliya bo'limi faqat adminlar uchun (MANAGER_CHAT_IDS)."
+                )
+                return
+            }
             delete s.payload.empList
             delete s.payload.empSelected
             delete s.payload.pendingAdvanceAmount
@@ -995,12 +1061,28 @@ bot.on('message', async (msg) => {
         }
 
         if (s.authUser && text === 'Xodimlar') {
+            if (isEmployeeSession(s, chatId)) {
+                await bot.sendMessage(
+                    chatId,
+                    "Xodimlar ro'yxati faqat adminlar uchun. Sizda faqat dam olish so'rovi bor."
+                )
+                return
+            }
             await sendEmployeeList(chatId, s)
             return
         }
 
         if (s.authUser && text === 'Moliya ro\'yxati') {
+            if (isEmployeeSession(s, chatId)) {
+                await bot.sendMessage(chatId, "Bu ro'yxat faqat adminlar uchun.")
+                return
+            }
             await sendRecentMovements(chatId)
+            return
+        }
+
+        if (s.authUser && s.step === STEP.MAIN_MENU && isLeaveButtonText(text)) {
+            await handleLeaveRequest(chatId, s)
             return
         }
 
@@ -1144,10 +1226,13 @@ bot.on('message', async (msg) => {
             }
             s.authUser = user
             s.step = STEP.MAIN_MENU
+            const sub2 = isEmployeeSession(s, chatId)
+                ? "Dam olish uchun pastdagi tugmani bosing."
+                : "Bo'limni tanlang:"
             await bot.sendMessage(
                 chatId,
-                `Xush kelibsiz, ${user.full_name || 'foydalanuvchi'}.\nBo'limni tanlang:`,
-                mainMenuKeyboard(s.authUser)
+                `Xush kelibsiz, ${user.full_name || 'foydalanuvchi'}.\n${sub2}`,
+                mainMenuForSession(s, chatId)
             )
             return
         }
@@ -1204,7 +1289,7 @@ bot.on('message', async (msg) => {
             await bot.sendMessage(
                 chatId,
                 "Saqlandi. Ma'lumot CRM moliya bo'limiga yuborildi.",
-                mainMenuKeyboard(s.authUser)
+                mainMenuForSession(s, chatId)
             )
             return
         }
