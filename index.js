@@ -1009,7 +1009,7 @@ bot.onText(/\/start/, async (msg) => {
         reportPeriodYm: null,
         payload: {},
     })
-    await bot.sendMessage(chatId, 'Telefon raqamingizni yozing yoki kontaktni yuboring.', {
+    await bot.sendMessage(chatId, '📱 Davom etish uchun pastdagi tugma orqali kontaktingizni yuboring.', {
         reply_markup: {
             keyboard: [[{ text: '📱 Kontaktni yuborish', request_contact: true }]],
             resize_keyboard: true,
@@ -1021,15 +1021,29 @@ bot.onText(/\/start/, async (msg) => {
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id
     const text = String(msg.text || '').trim()
-    if (!text || text.startsWith('/start')) return
-
     const s = getSession(chatId)
 
     try {
-        if (msg.contact && s.step === STEP.WAIT_PHONE) {
-            const user = await findAllowedUserByPhone(msg.contact.phone_number)
+        /** Kontakt xabarlarida matn bo‘lmaydi — buni boshidagi `if (!text) return` oldin tutamiz */
+        if (msg.contact) {
+            if (s.step !== STEP.WAIT_PHONE) {
+                await bot.sendMessage(
+                    chatId,
+                    "Kontaktni tanlash uchun avval /start bosing, keyin «Kontaktni yuborish» tugmasidan foydalaning."
+                )
+                return
+            }
+            const rawPhone = msg.contact.phone_number
+            if (!rawPhone) {
+                await bot.sendMessage(
+                    chatId,
+                    "Telefon raqam ko‘rinmadi. Telegram sozlamalarida raqamni yashirmaganingizni tekshiring yoki boshqa usul bilan qayta urinib ko‘ring."
+                )
+                return
+            }
+            const user = await findAllowedUserByPhone(rawPhone)
             if (!user) {
-                await bot.sendMessage(chatId, "Ruxsat berilmadi. CRMda raqamingiz topilmadi (bot_users / mijozlar / xodimlar).")
+                await bot.sendMessage(chatId, "Ruxsat berilmadi. CRMda bu raqam topilmadi (xodim / bot_users).")
                 return
             }
             s.authUser = user
@@ -1041,6 +1055,8 @@ bot.on('message', async (msg) => {
             )
             return
         }
+
+        if (!text || text.startsWith('/start')) return
 
         if (isBackText(text)) {
             await goBack(chatId, s)
