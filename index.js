@@ -1041,6 +1041,15 @@ bot.on('message', async (msg) => {
                 )
                 return
             }
+            const cUid = msg.contact.user_id
+            const fromId = msg.from?.id
+            if (fromId == null || cUid == null || Number(cUid) !== Number(fromId)) {
+                await bot.sendMessage(
+                    chatId,
+                    "Boshqa odamning kontaktini yuborib bo‘lmaydi. Faqat pastdagi «Kontaktni yuborish» tugmasi orqali o‘z raqamingizni yuboring — boshqa xodim o‘rniga kirish oldini olish uchun."
+                )
+                return
+            }
             const user = await findAllowedUserByPhone(rawPhone)
             if (!user) {
                 await bot.sendMessage(chatId, "Ruxsat berilmadi. CRMda bu raqam topilmadi (xodim / bot_users).")
@@ -1238,17 +1247,16 @@ bot.on('message', async (msg) => {
         }
 
         if (s.step === STEP.WAIT_PHONE) {
-            const user = await findAllowedUserByPhone(text)
-            if (!user) {
-                await bot.sendMessage(chatId, 'Ruxsat berilmagan. CRMda raqamingiz topilmadi (reject).')
-                return
-            }
-            s.authUser = user
-            s.step = STEP.MAIN_MENU
             await bot.sendMessage(
                 chatId,
-                `Xush kelibsiz, ${user.full_name || 'foydalanuvchi'}.\n${welcomeSubline(s, chatId)}`,
-                mainMenuForSession(s, chatId)
+                "Raqamni qo‘lda yozish mumkin emas — boshqa xodim raqamidan kirishni oldini olish uchun faqat pastdagi «📱 Kontaktni yuborish» tugmasidan foydalaning.",
+                {
+                    reply_markup: {
+                        keyboard: [[{ text: '📱 Kontaktni yuborish', request_contact: true }]],
+                        resize_keyboard: true,
+                        one_time_keyboard: true,
+                    },
+                }
             )
             return
         }
