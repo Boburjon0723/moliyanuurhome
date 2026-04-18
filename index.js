@@ -75,8 +75,10 @@ function canonicalPhone(value) {
 function parseManagerChatIds() {
     const raw = process.env.MANAGER_CHAT_IDS || process.env.TELEGRAM_MANAGER_CHAT_IDS || ''
     const out = []
-    for (const part of raw.split(/[,\s]+/)) {
-        const t = part.trim()
+    // Vergul / bo'shliq; har bir qismdan .env qo'shtirnoqlarini olib tashlash
+    // ("123","456" yoki 123,456 ikkalasi ham ishlaydi)
+    for (const part of raw.split(/[,\s;]+/)) {
+        let t = part.trim().replace(/^["'`]+|["'`]+$/g, '')
         if (!t) continue
         const n = Number(t)
         if (Number.isFinite(n)) out.push(n)
