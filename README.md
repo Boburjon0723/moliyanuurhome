@@ -43,6 +43,23 @@ npm start
 - CRM **Xodimlar** kartasida **Telefon** `998XXXXXXXXX` — bot shu raqamni tan oladi.
 - Dam olish: xabar adminlarga **Ha / Yo‘q** inline tugmalar bilan boradi. **Ha** — CRM da xodimning `rest_days` +1; **Yo‘q** — rad, CRM o‘zgarmaydi. Avvalgi bazalar uchun: `supabase_employee_leave_approval_columns.sql`.
 
+## Kam qolgan xomashyo
+
+CRM **Ombor → Xomashyo** dagi `stock_quantity` / `min_stock` (ogohlantirish chegarasi) bo‘yicha:
+
+- Admin menyuda **⚠️ Kam qoldiq** yoki `/kam` — hozirgi ro‘yxat.
+- Avtomatik: har **30 daqiqada** (yoki `LOW_STOCK_CHECK_MS`) tekshiradi; ro‘yxat **o‘zgaganda** `MANAGER_CHAT_IDS` ga xabar yuboradi (bir xil holatni qayta-qayta spam qilmaydi).
+- Materialda chegara masalan `5` bo‘lsa, qoldiq ≤ 5 da «Kam»; `0` da «Tugagan».
+
+## Ombor: ishlatish / kirim
+
+Admin menyuda:
+
+- **📦 Ishlatish (−)** — material tanlash → miqdor → izoh → CRM qoldiq kamayadi (`material_stock_movements` type `out`).
+- **📥 Kirim (+)** — omborga qo‘shish (type `in`).
+
+Yetarli qoldiq bo‘lmasa chiqim rad etiladi. Kamaygach chegara buzilsa, avtomatik ogohlantirish ham ishlaydi.
+
 ## Fayllar
 
 | Fayl | Tavsif |

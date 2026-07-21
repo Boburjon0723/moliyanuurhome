@@ -50,6 +50,9 @@ const STEP = {
     EMP_SAL_AMOUNT: 'EMP_SAL_AMOUNT',
     EMP_SAL_NOTE: 'EMP_SAL_NOTE',
     PICK_MONTH: 'PICK_MONTH',
+    STOCK_PICK_MAT: 'STOCK_PICK_MAT',
+    STOCK_ENTER_QTY: 'STOCK_ENTER_QTY',
+    STOCK_ENTER_NOTE: 'STOCK_ENTER_NOTE',
 }
 
 /** Telegram klientlarida turli «yotoq» emoji bo‘lishi mumkin — matn bo‘yicha ham taniymiz */
@@ -161,13 +164,45 @@ async function findAllowedUserByPhone(phoneRaw) {
 }
 
 async function getDepartments() {
-    const { data, error } = await supabase
+    let query = supabase
         .from('departments')
-        .select('id, name_uz, name_ru, name_en, parent_id')
+        .select('id, name_uz, name_ru, name_en, parent_id, is_active, created_at, sort_order')
         .order('sort_order', { ascending: true })
         .order('created_at', { ascending: true })
-    if (error) throw error
-    return data || []
+
+    // CRM bilan bir xil: yashirilgan (is_active=false) bo‘limlar chiqmasin
+    const { data, error } = await query.eq('is_active', true)
+    if (error) {
+        // Eski sxemada is_active yo‘q bo‘lishi mumkin
+        const m = String(error.message || error)
+        if (m.includes('is_active') || m.includes('column')) {
+            const fallback = await supabase
+                .from('departments')
+                .select('id, name_uz, name_ru, name_en, parent_id, created_at, sort_order')
+                .order('sort_order', { ascending: true })
+                .order('created_at', { ascending: true })
+            if (fallback.error) throw fallback.error
+            return dedupeDepartmentsByName(fallback.data || [])
+        }
+        throw error
+    }
+    return dedupeDepartmentsByName(data || [])
+}
+
+/** Bir xil nomdagi dublikat bo‘limlarni yashirish (eng eski qoladi) */
+function dedupeDepartmentsByName(rows) {
+    const seen = new Set()
+    const out = []
+    for (const d of rows) {
+        const name = String(d.name_uz || d.name_ru || d.name_en || '')
+            .trim()
+            .toLowerCase()
+        if (!name) continue
+        if (seen.has(name)) continue
+        seen.add(name)
+        out.push(d)
+    }
+    return out
 }
 
 async function getMaterialNames(limit = 24) {
@@ -938,16 +973,300 @@ function employeeActionKeyboard() {
     }
 }
 
+const LOW_STOCK_BTN = '⚠️ Kam qoldiq'
+const STOCK_LIST_BTN = '📋 Qoldiq'
+const STOCK_OUT_BTN = '📦 Ishlatish (−)'
+const STOCK_IN_BTN = '📥 Kirim (+)'
+const STOCK_SKIP_NOTE = '⏭ Izohsiz'
+
 function adminMainMenuKeyboard() {
     return {
         reply_markup: {
             keyboard: [
                 [{ text: 'Moliya' }, { text: 'Xodimlar' }],
+                [{ text: STOCK_OUT_BTN }, { text: STOCK_IN_BTN }],
+                [{ text: STOCK_LIST_BTN }, { text: LOW_STOCK_BTN }],
                 [{ text: 'Moliya ro\'yxati' }],
             ],
             resize_keyboard: true,
         },
     }
+}
+
+function materialUnitLabel(unit) {
+    const map = { pcs: 'dona', kg: 'kg', m: 'm', l: 'litr' }
+    return map[unit] || unit || ''
+}
+
+/** CRM ombor: track_stock materiallar, qoldiq <= min yoki 0 */
+async function getLowStockMaterials() {
+    const { data, error } = await supabase
+        .from('raw_materials')
+        .select('id, name_uz, sku, unit, stock_quantity, min_stock, track_stock, is_active')
+        .eq('track_stock', true)
+        .order('name_uz', { ascending: true })
+
+    if (error) {
+        const m = String(error.message || error)
+        if (m.includes('does not exist') || m.includes('schema cache') || m.includes('column')) {
+            throw new Error(
+                "raw_materials ombor ustunlari yo'q. CRM da add_material_stock_inventory.sql ni ishga tushiring."
+            )
+        }
+        throw error
+    }
+
+    return (data || []).filter((row) => {
+        if (row.is_active === false) return false
+        const stock = Number(row.stock_quantity) || 0
+        const min = Number(row.min_stock) || 0
+        if (stock <= 0) return true
+        if (min > 0 && stock <= min) return true
+        return false
+    })
+}
+
+function formatLowStockMessage(rows) {
+    if (!rows.length) {
+        return '✅ Hozircha kam yoki tugagan xomashyo yo‘q.'
+    }
+    const out = rows.filter((r) => (Number(r.stock_quantity) || 0) <= 0)
+    const low = rows.filter((r) => (Number(r.stock_quantity) || 0) > 0)
+    const lines = [`⚠️ Kam / tugagan xomashyo: ${rows.length} ta\n`]
+    if (out.length) {
+        lines.push('🔴 Tugagan:')
+        out.forEach((r, i) => {
+            const u = materialUnitLabel(r.unit)
+            const min = Number(r.min_stock) || 0
+            lines.push(
+                `${i + 1}. ${r.name_uz || '—'}${r.sku ? ` (${r.sku})` : ''} — 0 ${u}` +
+                    (min > 0 ? ` (chegara: ${min})` : '')
+            )
+        })
+        lines.push('')
+    }
+    if (low.length) {
+        lines.push('🟡 Kam qoldiq:')
+        low.forEach((r, i) => {
+            const u = materialUnitLabel(r.unit)
+            const stock = Number(r.stock_quantity) || 0
+            const min = Number(r.min_stock) || 0
+            lines.push(
+                `${i + 1}. ${r.name_uz || '—'}${r.sku ? ` (${r.sku})` : ''} — ${stock} ${u} (chegara: ${min})`
+            )
+        })
+    }
+    lines.push('\nCRM → Ombor → Xomashyo / detallar')
+    return lines.join('\n')
+}
+
+function lowStockFingerprint(rows) {
+    return rows
+        .map((r) => `${r.id}:${Number(r.stock_quantity) || 0}:${Number(r.min_stock) || 0}`)
+        .sort()
+        .join('|')
+}
+
+let lastLowStockFingerprint = null
+
+async function sendLowStockReport(chatId) {
+    const rows = await getLowStockMaterials()
+    await bot.sendMessage(chatId, formatLowStockMessage(rows))
+    return rows
+}
+
+/** Barcha ombor materiallari va qoldiqlari */
+function formatStockListMessage(rows) {
+    if (!rows.length) {
+        return 'Ombor materiallari yo‘q. CRM → Ombor → Xomashyo da qo‘shing.'
+    }
+    const lines = [`📋 Xomashyo qoldiq: ${rows.length} ta\n`]
+    rows.forEach((r, i) => {
+        const stock = Number(r.stock_quantity) || 0
+        const min = Number(r.min_stock) || 0
+        const u = materialUnitLabel(r.unit)
+        let mark = '🟢'
+        if (stock <= 0) mark = '🔴'
+        else if (min > 0 && stock <= min) mark = '🟡'
+        lines.push(
+            `${i + 1}. ${mark} ${r.name_uz || '—'}${r.sku ? ` (${r.sku})` : ''} — ${stock} ${u}` +
+                (min > 0 ? ` (chegara: ${min})` : '')
+        )
+    })
+    return lines.join('\n')
+}
+
+async function sendStockListReport(chatId) {
+    const rows = await getWarehouseMaterials()
+    const text = formatStockListMessage(rows)
+    // Telegram 4096 belgi chegarasi
+    if (text.length <= 4000) {
+        await bot.sendMessage(chatId, text)
+        return
+    }
+    let chunk = ''
+    for (const line of text.split('\n')) {
+        if ((chunk + '\n' + line).length > 4000) {
+            await bot.sendMessage(chatId, chunk)
+            chunk = line
+        } else {
+            chunk = chunk ? `${chunk}\n${line}` : line
+        }
+    }
+    if (chunk) await bot.sendMessage(chatId, chunk)
+}
+
+/** Adminlarga avtomatik xabar — faqat ro‘yxat o‘zgaganda (spam emas) */
+async function notifyManagersLowStock({ force = false } = {}) {
+    const managers = parseManagerChatIds()
+    if (!managers.length) {
+        console.warn('LOW_STOCK: MANAGER_CHAT_IDS bo‘sh — xabar yuborilmadi')
+        return
+    }
+    let rows
+    try {
+        rows = await getLowStockMaterials()
+    } catch (err) {
+        console.error('LOW_STOCK check failed:', err.message || err)
+        return
+    }
+    const fp = lowStockFingerprint(rows)
+    if (!force && fp === lastLowStockFingerprint) return
+
+    const prevHad = lastLowStockFingerprint && lastLowStockFingerprint.length > 0
+    lastLowStockFingerprint = fp
+
+    let text
+    if (!rows.length) {
+        if (!force && !prevHad) return
+        text = force
+            ? '✅ Hozircha kam yoki tugagan xomashyo yo‘q.'
+            : '✅ Xomashyo qoldig‘i tiklandi — kam/tugagan yo‘q.'
+    } else {
+        text = formatLowStockMessage(rows)
+    }
+
+    for (const chatId of managers) {
+        try {
+            await bot.sendMessage(chatId, text)
+        } catch (err) {
+            console.error(`LOW_STOCK notify ${chatId}:`, err.message || err)
+        }
+    }
+}
+
+/** Ombor materiallari (faqat track_stock) */
+async function getWarehouseMaterials() {
+    const { data, error } = await supabase
+        .from('raw_materials')
+        .select('id, name_uz, sku, unit, stock_quantity, min_stock, track_stock, is_active')
+        .eq('track_stock', true)
+        .order('name_uz', { ascending: true })
+
+    if (error) {
+        const m = String(error.message || error)
+        if (m.includes('does not exist') || m.includes('schema cache') || m.includes('column')) {
+            throw new Error(
+                "Ombor jadvallari yo'q. CRM da add_material_stock_inventory.sql ni ishga tushiring."
+            )
+        }
+        throw error
+    }
+    return (data || []).filter((r) => r.is_active !== false)
+}
+
+function stockMaterialLabel(m) {
+    const stock = Number(m.stock_quantity) || 0
+    const u = materialUnitLabel(m.unit)
+    const name = String(m.name_uz || 'Material').trim()
+    return `${name} · ${stock} ${u}`.slice(0, 64)
+}
+
+function stockMaterialKeyboard(materials) {
+    const rows = []
+    for (let i = 0; i < (materials || []).length; i += 2) {
+        const row = [{ text: stockMaterialLabel(materials[i]) }]
+        if (materials[i + 1]) row.push({ text: stockMaterialLabel(materials[i + 1]) })
+        rows.push(row)
+    }
+    rows.push([{ text: '⬅️ Orqaga' }])
+    return {
+        reply_markup: {
+            keyboard: rows,
+            resize_keyboard: true,
+        },
+    }
+}
+
+async function sendStockPickStep(chatId, s, action) {
+    const materials = await getWarehouseMaterials()
+    if (!materials.length) {
+        s.step = STEP.MAIN_MENU
+        await bot.sendMessage(
+            chatId,
+            "Ombor materiallari yo‘q. Avval CRM → Ombor → Xomashyo da material qo‘shing.",
+            mainMenuForSession(s, chatId)
+        )
+        return
+    }
+    s.payload.stockAction = action // 'out' | 'in'
+    s.payload.stockMaterials = materials
+    s.payload.stockMatByLabel = {}
+    for (const m of materials) {
+        s.payload.stockMatByLabel[stockMaterialLabel(m)] = m
+    }
+    s.step = STEP.STOCK_PICK_MAT
+    const title =
+        action === 'in'
+            ? '📥 Kirim — materialni tanlang:'
+            : '📦 Ishlatish (chiqim) — materialni tanlang:'
+    await bot.sendMessage(chatId, title, stockMaterialKeyboard(materials))
+}
+
+function parseQtyInput(text) {
+    const n = Number(String(text || '').replace(/\s/g, '').replace(',', '.'))
+    return Number.isFinite(n) ? n : NaN
+}
+
+async function applyWarehouseStockMove({ material, action, qty, note, user }) {
+    const current = Number(material.stock_quantity) || 0
+    const delta = action === 'in' ? qty : -qty
+    if (action === 'out' && qty > current) {
+        throw new Error(
+            `Yetarli emas. Hozir: ${current} ${materialUnitLabel(material.unit)}, so‘ralgan: ${qty}`
+        )
+    }
+    const newBalance = Math.max(0, current + delta)
+    const moveType = action === 'in' ? 'in' : 'out'
+
+    const { error: moveErr } = await supabase.from('material_stock_movements').insert([
+        {
+            raw_material_id: material.id,
+            qty: delta,
+            type: moveType,
+            balance_after: newBalance,
+            note: note || null,
+            ref_type: 'telegram_bot',
+            ref_id: null,
+        },
+    ])
+    if (moveErr) {
+        const m = String(moveErr.message || moveErr)
+        if (m.includes('does not exist') || m.includes('schema cache')) {
+            throw new Error(
+                "material_stock_movements jadvali yo'q. add_material_stock_inventory.sql ni ishga tushiring."
+            )
+        }
+        throw moveErr
+    }
+
+    const { error: updErr } = await supabase
+        .from('raw_materials')
+        .update({ stock_quantity: newBalance, track_stock: true })
+        .eq('id', material.id)
+    if (updErr) throw updErr
+
+    return { newBalance, delta, current, who: user?.full_name || 'bot' }
 }
 
 function employeeOnlyMenuKeyboard() {
@@ -1110,6 +1429,26 @@ async function goBack(chatId, s) {
         await sendEmployeeList(chatId, s)
         return
     }
+    if (s.step === STEP.STOCK_ENTER_NOTE) {
+        s.step = STEP.STOCK_ENTER_QTY
+        const mat = s.payload.stockSelected
+        const u = materialUnitLabel(mat?.unit)
+        await bot.sendMessage(
+            chatId,
+            `Miqdorni kiriting (${u}). Joriy: ${Number(mat?.stock_quantity) || 0} ${u}`
+        )
+        return
+    }
+    if (s.step === STEP.STOCK_ENTER_QTY) {
+        await sendStockPickStep(chatId, s, s.payload.stockAction || 'out')
+        return
+    }
+    if (s.step === STEP.STOCK_PICK_MAT) {
+        s.payload = {}
+        s.step = STEP.MAIN_MENU
+        await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuForSession(s, chatId))
+        return
+    }
     s.payload = {}
     s.step = STEP.MAIN_MENU
     await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuForSession(s, chatId))
@@ -1202,7 +1541,7 @@ bot.on('message', async (msg) => {
             return
         }
 
-        if (!text || text.startsWith('/start')) return
+        if (!text || text.startsWith('/')) return
 
         if (isBackText(text)) {
             await goBack(chatId, s)
@@ -1243,6 +1582,127 @@ bot.on('message', async (msg) => {
                 return
             }
             await sendRecentMovements(chatId)
+            return
+        }
+
+        if (s.authUser && text === LOW_STOCK_BTN) {
+            if (!isManagerChatId(chatId)) {
+                await bot.sendMessage(chatId, 'Kam qoldiq hisoboti faqat adminlar uchun.')
+                return
+            }
+            try {
+                await sendLowStockReport(chatId)
+            } catch (err) {
+                await bot.sendMessage(chatId, `Xatolik: ${err.message || err}`)
+            }
+            return
+        }
+
+        if (s.authUser && text === STOCK_LIST_BTN) {
+            if (!isManagerChatId(chatId)) {
+                await bot.sendMessage(chatId, 'Qoldiq ro‘yxati faqat adminlar uchun.')
+                return
+            }
+            try {
+                await sendStockListReport(chatId)
+            } catch (err) {
+                await bot.sendMessage(chatId, `Xatolik: ${err.message || err}`)
+            }
+            return
+        }
+
+        if (s.authUser && (text === STOCK_OUT_BTN || text === STOCK_IN_BTN)) {
+            if (!isManagerChatId(chatId)) {
+                await bot.sendMessage(chatId, 'Ombor amallari faqat adminlar uchun.')
+                return
+            }
+            try {
+                await sendStockPickStep(chatId, s, text === STOCK_IN_BTN ? 'in' : 'out')
+            } catch (err) {
+                await bot.sendMessage(chatId, `Xatolik: ${err.message || err}`)
+            }
+            return
+        }
+
+        if (s.step === STEP.STOCK_PICK_MAT) {
+            const byLabel = s.payload.stockMatByLabel || {}
+            const chosen = byLabel[text]
+            if (!chosen) {
+                await bot.sendMessage(chatId, "Materialni tugmadan tanlang.")
+                return
+            }
+            s.payload.stockSelected = chosen
+            s.step = STEP.STOCK_ENTER_QTY
+            const u = materialUnitLabel(chosen.unit)
+            const stock = Number(chosen.stock_quantity) || 0
+            const action = s.payload.stockAction === 'in' ? 'kirim' : 'chiqim (ishlatish)'
+            await bot.sendMessage(
+                chatId,
+                `${chosen.name_uz}\nJoriy qoldiq: ${stock} ${u}\n\n${action} miqdorini yozing (masalan 1 yoki 2.5):`,
+                {
+                    reply_markup: {
+                        keyboard: [[{ text: '⬅️ Orqaga' }]],
+                        resize_keyboard: true,
+                    },
+                }
+            )
+            return
+        }
+
+        if (s.step === STEP.STOCK_ENTER_QTY) {
+            const qty = parseQtyInput(text)
+            if (!(qty > 0)) {
+                await bot.sendMessage(chatId, 'Miqdor 0 dan katta bo‘lishi kerak. Qayta yozing:')
+                return
+            }
+            s.payload.stockQty = qty
+            s.step = STEP.STOCK_ENTER_NOTE
+            await bot.sendMessage(chatId, 'Izoh yozing yoki «Izohsiz» ni bosing:', {
+                reply_markup: {
+                    keyboard: [[{ text: STOCK_SKIP_NOTE }], [{ text: '⬅️ Orqaga' }]],
+                    resize_keyboard: true,
+                },
+            })
+            return
+        }
+
+        if (s.step === STEP.STOCK_ENTER_NOTE) {
+            const mat = s.payload.stockSelected
+            const qty = Number(s.payload.stockQty) || 0
+            const action = s.payload.stockAction === 'in' ? 'in' : 'out'
+            if (!mat || !(qty > 0)) {
+                s.step = STEP.MAIN_MENU
+                await bot.sendMessage(chatId, 'Asosiy menyu:', mainMenuForSession(s, chatId))
+                return
+            }
+            const note = text === STOCK_SKIP_NOTE ? null : String(text || '').trim() || null
+            try {
+                const result = await applyWarehouseStockMove({
+                    material: mat,
+                    action,
+                    qty,
+                    note,
+                    user: s.authUser,
+                })
+                const u = materialUnitLabel(mat.unit)
+                const min = Number(mat.min_stock) || 0
+                let warn = ''
+                if (result.newBalance <= 0) warn = '\n🔴 Diqqat: material tugadi!'
+                else if (min > 0 && result.newBalance <= min) {
+                    warn = `\n🟡 Diqqat: kam qoldiq (chegara ${min}).`
+                }
+                const verb = action === 'in' ? 'Kirim' : 'Ishlatildi'
+                await bot.sendMessage(
+                    chatId,
+                    `✅ ${verb}: ${mat.name_uz}\n${qty} ${u}\nOldin: ${result.current} → Hozir: ${result.newBalance} ${u}${warn}`,
+                    mainMenuForSession(s, chatId)
+                )
+                s.payload = {}
+                s.step = STEP.MAIN_MENU
+                void notifyManagersLowStock({ force: false })
+            } catch (err) {
+                await bot.sendMessage(chatId, `Xatolik: ${err.message || err}`)
+            }
             return
         }
 
@@ -1489,4 +1949,49 @@ bot.on('callback_query', async (query) => {
     }
 })
 
+bot.onText(/\/kam|\/lowstock/, async (msg) => {
+    const chatId = msg.chat.id
+    if (!isManagerChatId(chatId)) {
+        await bot.sendMessage(chatId, 'Kam qoldiq hisoboti faqat adminlar uchun.')
+        return
+    }
+    try {
+        await sendLowStockReport(chatId)
+    } catch (err) {
+        await bot.sendMessage(chatId, `Xatolik: ${err.message || err}`)
+    }
+})
+
+bot.onText(/\/qoldiq|\/stock/, async (msg) => {
+    const chatId = msg.chat.id
+    if (!isManagerChatId(chatId)) {
+        await bot.sendMessage(chatId, 'Qoldiq ro‘yxati faqat adminlar uchun.')
+        return
+    }
+    try {
+        await sendStockListReport(chatId)
+    } catch (err) {
+        await bot.sendMessage(chatId, `Xatolik: ${err.message || err}`)
+    }
+})
+
 console.log('Telegram finance bot started...')
+
+/** Har N daqiqada CRM omborini tekshiradi; yangi kam/tugagan bo‘lsa adminlarga yozadi */
+const LOW_STOCK_CHECK_MS = Number(process.env.LOW_STOCK_CHECK_MS)
+const lowStockIntervalMs =
+    Number.isFinite(LOW_STOCK_CHECK_MS) && LOW_STOCK_CHECK_MS >= 0
+        ? LOW_STOCK_CHECK_MS
+        : 30 * 60 * 1000
+
+if (lowStockIntervalMs > 0) {
+    setTimeout(() => {
+        void notifyManagersLowStock({ force: false })
+    }, 15_000)
+    setInterval(() => {
+        void notifyManagersLowStock({ force: false })
+    }, lowStockIntervalMs)
+    console.log(`LOW_STOCK auto-check every ${Math.round(lowStockIntervalMs / 60000)} min`)
+} else {
+    console.log('LOW_STOCK auto-check disabled (LOW_STOCK_CHECK_MS=0)')
+}
