@@ -960,6 +960,53 @@ function getSession(chatId) {
     return sessions.get(chatId)
 }
 
+/** Deploy / restart dan keyin xotira tozalanadi — admin uchun sessiyani qayta tiklaymiz */
+function ensureManagerAuth(chatId, s, from) {
+    if (!isManagerChatId(chatId)) return false
+    if (s.authUser?.isManager || s.authUser?.source_table === 'manager') {
+        if (s.step === STEP.WAIT_PHONE) s.step = STEP.MAIN_MENU
+        return true
+    }
+    s.authUser = {
+        id: from?.id != null ? String(from.id) : 'manager',
+        full_name: [from?.first_name, from?.last_name].filter(Boolean).join(' ').trim() || 'Admin',
+        isManager: true,
+        employee_id: null,
+        source_table: 'manager',
+        phone: null,
+    }
+    if (s.step === STEP.WAIT_PHONE || !s.step) s.step = STEP.MAIN_MENU
+    return true
+}
+
+/** Tugma matnini solishtirish (− / - / — farqi) */
+function normBtn(text) {
+    return String(text || '')
+        .trim()
+        .replace(/[\u2212\u2013\u2014]/g, '-') // − – —
+        .replace(/\s+/g, ' ')
+}
+
+function isStockOutBtn(text) {
+    const t = normBtn(text).toLowerCase()
+    return t === normBtn(STOCK_OUT_BTN).toLowerCase() || t.includes('ishlatish')
+}
+
+function isStockInBtn(text) {
+    const t = normBtn(text).toLowerCase()
+    return t === normBtn(STOCK_IN_BTN).toLowerCase() || (t.includes('kirim') && t.includes('+'))
+}
+
+function isStockListBtn(text) {
+    const t = normBtn(text).toLowerCase()
+    return t === normBtn(STOCK_LIST_BTN).toLowerCase() || t === '📋 qoldiq' || t === 'qoldiq'
+}
+
+function isLowStockBtn(text) {
+    const t = normBtn(text).toLowerCase()
+    return t === normBtn(LOW_STOCK_BTN).toLowerCase() || t.includes('kam qoldiq')
+}
+
 function employeeActionKeyboard() {
     return {
         reply_markup: {
@@ -1498,6 +1545,7 @@ bot.on('message', async (msg) => {
     const chatId = msg.chat.id
     const text = String(msg.text || '').trim()
     const s = getSession(chatId)
+    ensureManagerAuth(chatId, s, msg.from)
 
     try {
         /** Kontakt xabarlarida matn bo‘lmaydi — buni boshidagi `if (!text) return` oldin tutamiz */
@@ -1585,7 +1633,7 @@ bot.on('message', async (msg) => {
             return
         }
 
-        if (s.authUser && text === LOW_STOCK_BTN) {
+        if (s.authUser && isLowStockBtn(text)) {
             if (!isManagerChatId(chatId)) {
                 await bot.sendMessage(chatId, 'Kam qoldiq hisoboti faqat adminlar uchun.')
                 return
@@ -1598,7 +1646,7 @@ bot.on('message', async (msg) => {
             return
         }
 
-        if (s.authUser && text === STOCK_LIST_BTN) {
+        if (s.authUser && isStockListBtn(text)) {
             if (!isManagerChatId(chatId)) {
                 await bot.sendMessage(chatId, 'Qoldiq ro‘yxati faqat adminlar uchun.')
                 return
@@ -1611,13 +1659,13 @@ bot.on('message', async (msg) => {
             return
         }
 
-        if (s.authUser && (text === STOCK_OUT_BTN || text === STOCK_IN_BTN)) {
+        if (s.authUser && (isStockOutBtn(text) || isStockInBtn(text))) {
             if (!isManagerChatId(chatId)) {
                 await bot.sendMessage(chatId, 'Ombor amallari faqat adminlar uchun.')
                 return
             }
             try {
-                await sendStockPickStep(chatId, s, text === STOCK_IN_BTN ? 'in' : 'out')
+                await sendStockPickStep(chatId, s, isStockInBtn(text) ? 'in' : 'out')
             } catch (err) {
                 await bot.sendMessage(chatId, `Xatolik: ${err.message || err}`)
             }
